@@ -1,0 +1,74 @@
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/pinctrl/bcm2835.h>
+
+/ {
+	compatible = "brcm,bcm2835", "brcm,bcm2708", "brcm,2709";
+	fragment@0 {
+		target = <&gpio>;
+		__overlay__ {
+			spi1_pins: spi1_pins {
+				brcm,pins = <19 20 21>;
+				brcm,function = <3>;
+			};
+			
+			spi1_cs_pins: spi1_cs_pins {
+				brcm,pins = <18>;
+				brcm,function = <1>;
+			};
+			
+			spi1_reset_pin: spi1_reset_pin {
+				brcm,pins = <25>;
+				brcm,function = <BCM2835_FSEL_GPIO_OUT>;
+				brcm,pull = <BCM2835_PUD_UP>;
+			};
+
+			spi1_int_pin: spi1_int_pin {
+				brcm,pins = <24>;
+				brcm,function = <BCM2835_FSEL_GPIO_IN>;
+				brcm,pull = <BCM2835_PUD_UP>;
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&spi1>;
+		frag1: __overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&spi1_pins &spi1_cs_pins &spi1_reset_pin &spi1_int_pin>;
+			cs-gpios = <&gpio 18 1>;
+			status = "okay";
+		
+			/* in case we prefer to access via sysfs 	
+			spidev0: spidev@0 {
+				compatible = "spidev";
+				reg = <0>;
+				spi-max-frequency = <10000000>;
+				status = "okay";
+			*/
+			my_enc28j60@0 {
+				compatible = "brajan";
+				spi-max-frequency = <12000000>; //SCK freq - max is 20, set 12 to debug with saleae and bypass MII reg issues with freq ~8 MHz
+				spi-clk-pol = <0>; //CPOL
+				reg = <0x0>; //CS0 pin
+				status = "okay";
+			};	
+		};
+	};
+
+	fragment@2 {
+		target = <&aux>;
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	__overrides__ {
+		cs0_pin = <&spi1_cs_pins>, "brcm,pins:0",
+			  <&frag1>, "cs-gpios:4";
+		cs0_spidev = <&spidev0>, "status";
+	};
+};
