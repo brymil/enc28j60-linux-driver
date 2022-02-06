@@ -1,4 +1,3 @@
-
 //These are SPI opcodes:
 //Read Ctrl Reg,
 //Read Buff Mem,
@@ -8,7 +7,7 @@
 //Bit Field Clear,
 //System Reset Cmd (Soft)
 
-#define CMD_MASK (~(0x1F))
+#define CMD_MASK 0xE0
 #define CMD_POS (5)
 #define RCR (0 << CMD_POS)
 #define RBM (1 << CMD_POS)
@@ -73,24 +72,6 @@ struct spi_transfer xfers[]= {
 	 //.cs_change_delay = mii_regs_tcss,},
 };
 
-static int is_eth_reg(char *data, size_t *len) {
-	switch(curr_mem_bank) {
-		case 0:
-		case 1:
-			break;
-		case 2:
-		case 3:
-			if (data[0] &)
-			//if RCR, insert dummy
-			break;
-		default:
-			dev_err("Selected memory bank of device makes no sense - inconsistent state !\n");
-			return -EINVAL;
-
-	}
-	return 0;
-}
-
 //registers will be passed by user in the commands, but from i.e. debugfs they won't know
 //in which bank it is. However we can define a uint8_t in such way that 1F will be reserved for
 //reg addr which user has to pass, and the rest of high bits will be for encoding bank info.
@@ -107,7 +88,6 @@ static int is_eth_reg(char *data, size_t *len) {
 #define BANK3 (2 < BANK_POS)
 #define BANK4 (4 < BANK_POS)
 
-//skip last 6 regs - they are common, so bank doesn't matter - it will default to 0
 typedef enum enc_reg = {
 	//bank 0
 	ERDPTL = (0x0 | BANK0),
@@ -133,6 +113,7 @@ typedef enum enc_reg = {
 	EDMADSTL = (0x14 | BANK0),
 	EDMADSTH = (0x15 | BANK0),
 	EDMACSL = (0x16 | BANK0),
+	//common regs
 	EIE = (0x1B | BANK0),
 	EIR = (0x1C | BANK0),
 	ESTAT = (0x1D | BANK0),
@@ -197,30 +178,15 @@ typedef enum enc_reg = {
 	EPAUSH = (0x19 | BANK3),
 } enc_reg;
 
-static int enc_eth_write(struct spi_device *spi, char *data, size_t data_len) {
+static int enc_spi_write(struct spi_device *spi, char *data, size_t data_len, char cmd) {
 
-}
-
-static int enc_mii_write(struct spi_device *spi, char *data, size_t data_len) {
-
-}
-
-static int enc_mac_write(struct spi_device *spi, char *data, size_t data_len) {
-
-}
-
-
-static int enc_spi_write(struct spi_device *spi, char *data, size_t data_len) {
-
-	//at this point we should just send the data depending on bank register
-	//any dummy bytes/cmds should be encoded by higher layer already
-	
 	int ret;
-	struct spi_transfer spi_tx = {.tx_buf = data, .len = data_len, spi->max_speed_hz};
+	struct spi_transfer spi_tx = {.tx_buf = data, .len = data_len - 1, spi->max_speed_hz, .cs_change = 1};
 	const uint8_t req_bank = data[0] >> BANK_POS;
+	//we extracted the info about bank - now we can reuse it for getting cmd there
+	data[0] = (~(BANK_MASK) & data[0]) | (cmd & CMD_MASK);
 	//TODO: add ratelimiting here + statistics track
 	if (curr_mem_bank != req_bank) {
-		//change bank
 		struct spi_transfer spi_tx_bank;
 		char bank_change[] = {
 			WCR | ECON1, //SPI write + address
@@ -239,52 +205,56 @@ static int enc_spi_write(struct spi_device *spi, char *data, size_t data_len) {
 	ret = spi_sync_transfer(spi, spi_tx_bank, 1);
 	if (ret != 0) {
 		dev_dbg("TX failed\n");
-		return ret;
 	}
-
-	/*
-	//BELOW IS OBSOLETE - UPDATE AND REMOVE
-	//first 8 bytes of transfer determine what cmd is this
-	//based on it, there will be differences in cs_change behaviour
-	int ret;
-	struct spi_transfer spi_tx = {.tx_buf = data, .len = data_len, spi->max_speed_hz};
-	switch(data[0] & CMD_MASK) {
-		case RCR:
-			//data immediately shifts out if it is ETH reg
-			//if it is MII or MAC - then first byte is dummy byte
-			is_eth_reg();
-			char *tmp_buf = kalloc();
-			break;
-		case RBM:
-			//opcode + constant 1Ah
-			//data from ERDPT will start transmitting on SO
-			//if SCK continues, same byte will be retransmitted
-			//if AUTOINC enabled, next bytes will be sent <- smaller SPI overhead for reading
-			break;
-		case WCR:
-			//after each cmd CS should be raised ? <- double check that, from the sequence in datasheet it doesn't seem like it
-			break;
-		case WBM:
-			//write to RxTx 8Kb memory. With AUTOINC we go the next bit
-			//Data stored under memory are pointed by EWRPT - should be shifted out Msb first
-			//EWRPT will increment 1 byte if AUTOINC is on
-			//do not bring up CS in that case for continuous write and minimizing spi overhead
-			break;
-		case BFS:
-			break;
-		case BFC:
-			break;
-		case SRC:
-			break;
-		default:
-			dev_err("Unrecognized SPI command - aborting\n");
-			return -EINVAL;
-	}
-	ret = spi_sync_transfer(spi, spi_tx, 1);
 	return ret;
-	*/
 }
 
-static int enc_spi_read() {
+static int enc_spi_read(struct spi_device *spi, char *data, size_t data_len, uint8_t cmd) {
+	int ret;
+	const size_t rx_len = data_len + 1;
+	char rx_buf[data_len + 1]; //accomodate for dummy byte if necessary
 
+	if (cmd != RCR || cmd != RBM) {
+		return -EINVAL;
+	}
+
+	const uint8_t req_bank = data[0] >> BANK_POS;
+	data[0] = (~(BANK_MASK) & data[0]) | (data[data_len] & CMD_MASK);
+
+	//TODO: add ratelimiting here + statistics track
+	if (curr_mem_bank != req_bank) {
+		//change bank
+		struct spi_transfer spi_tx_bank;
+		char bank_change[] = {
+			WCR | ECON1,
+			req_bank,
+		};
+		
+		spi_tx_bank = {.tx_buf = spi_tx_bank, .len = 2, spi->max_speed_hz, .cs_change = 1};
+		ret = spi_sync_transfer(spi, spi_tx_bank, 1);
+		
+		if (ret != 0) {
+			dev_dbg("TX of bank change failed\n");
+			return ret;
+		}
+	}
+	
+	if (cmd == RCR) {
+		if (req_bank == 2 ||
+		    (data[0] > EBSTCON)) {
+			//accomodation for dummy byte
+			ret = spi_write_then_read(spi, data, 2, rx_buf, rx_len);
+		}
+	} else {
+		ret = spi_write_then_read(spi, data, 2, rx_buf, rx_len);
+	}
+
+	if (ret < 0) {
+		dev_dbg("Read failed failed, ret %d\n", ret);
+		return ret;
+	}
+	memcpy(&rx_buf, data, ret);
+
+	//return errno or amount of bytes succesfully read
+	return ret;
 }
