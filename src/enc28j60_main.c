@@ -12,6 +12,9 @@
 
 #include <linux/netdevice.h>
 
+#include "enc28j60.h"
+#include "spi_cmds.h"
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("BRYJAN");
 MODULE_DESCRIPTION("ENC28J60 - very fast Ethernet controller, feels like it's 90s again");
@@ -44,7 +47,7 @@ static const struct of_device_id enc28j60_dt_ids[] = {
 };
 
 static const struct spi_device_id enc28j60_id[] = {
-	{"encj2860", enc28j60},
+	{"enc28j60", enc28j60},
 	{}
 };
 MODULE_DEVICE_TABLE(spi, enc28j60_id);
@@ -66,63 +69,28 @@ static void get_dt_data(struct spi_device *spi) {
 	
 	pptr = of_find_property(spi->dev.of_node, "spi-clk-pol", NULL);
 	if (!pptr) {
-		dev_info(&spi->dev, "Using default platform spi frequency\n");
+		dev_info(&spi->dev, "Using default platform clk pol\n");
 	}
 	else {
 		memcpy(&spi_clk_pol, pptr->value, sizeof(spi_clk_pol));
 		spi->mode = spi_clk_pol & SPI_CPOL; //idle at low state
 	}
-	printk(KERN_INFO "Frequency is %u...\n", spi->max_speed_hz);
+}
 
+static void led_test(struct spi_device *spi) {
+	char miregaddr[] = {MIREGADR, 0x14};
+	char mireglow_ledb_on[] = {MIWRL, 0x80};
+	char mireghi_leda_on[] = {MIWRH, 0x38};
+	
+	enc_spi_write(spi, miregaddr, 2, WCR);
+	enc_spi_write(spi, mireglow_ledb_on, 2, WCR);
+	enc_spi_write(spi, mireghi_leda_on, 2, WCR);
 }
 
 static int enc28j60_probe(struct spi_device *spi) {
 	struct enc28j60 *eth_drv;
 	int ret;
-
-	//WCR NEEDS deassert of CS pin after transfer
-
-	char bank_change[] = {
-		(2 << 5) | 0x1F, //SPI write + address
-		0x02, //select Bank 2
-	};
-	char mii_regaddr[] = {
-		(2 << 5) | 0x14, //SPI write + MIREGADDr
-		0x14, //PHLCON addr
-	};
-	char mii_reglow_ledb_off[] = { 
-		(2 << 5) | 0x16, //SPI write + MIWRL
-		0x80, //PHLCON lower 8 bits
-	};
-	char mii_reglow_leda_on[] = {
-		(2 << 5) | 0x17, //SPI write + MIWRL
-		0x38, //PHLCON higher 8 bits
-	};
-	
 	get_dt_data(spi);
-
-	struct spi_delay mii_regs_tcsh = {.value = 210, .unit = SPI_DELAY_UNIT_NSECS };
-	struct spi_delay mii_regs_tcss = {.value = 50, .unit = SPI_DELAY_UNIT_NSECS };
-
-	struct spi_transfer xfers[]= {
-		{.tx_buf = bank_change,
-		 .len = 2,
-		 .cs_change = 1,
-		 //.cs_change_delay = mii_regs_tcss,
-		 .speed_hz = spi->max_speed_hz},
-		{.tx_buf = mii_regaddr,
-		 .len = 2,
-		 .speed_hz = spi->max_speed_hz,
-		 .cs_change = 1,},
-		{.tx_buf = mii_reglow_ledb_off,
-		 .len = 2,
-		 .speed_hz = spi->max_speed_hz,
-		 .cs_change = 1,},
-		{.tx_buf = mii_reglow_leda_on,
-		 .len = 2,
-		 .speed_hz = spi->max_speed_hz},
-		 //.cs_change_delay = mii_regs_tcss,},
-	};
 
 	ret = spi_setup(spi);
 	if (ret) {
@@ -139,7 +107,7 @@ static int enc28j60_probe(struct spi_device *spi) {
 	eth_drv->spi = spi;
 	spin_lock_init(&eth_drv->rcv_lock);
 	dev_set_drvdata(&spi->dev, eth_drv);
-/*
+
 	eth_drv->netdev = alloc_netdev(sizeof(struct enc28j60), "myeth%d", NET_NAME_UNKNOWN, mynetdev_setup);
 	if (!eth_drv->netdev) {
 		dev_err(&spi->dev, "Failed to alloc netdev\n");
@@ -152,27 +120,24 @@ static int enc28j60_probe(struct spi_device *spi) {
 		free_netdev(eth_drv->netdev);
 		return ret;
 	}
-*/
-	printk(KERN_INFO "Setup completed, diode test rolling...\n");
-	/* SPI TEST LEDS */
-	//write to ECON1 to select proper bank for MII regs
 
-	ret = spi_sync_transfer(spi, xfers, ARRAY_SIZE(xfers));
-	if (ret) {
-		printk(KERN_INFO "I failed to light the diode !!!!\n Ret is %d", ret);
-	}
-
+	led_test();
 	return ret;
 }
 
 static int enc28j60_remove(struct spi_device *spi) {
+	printk(KERN_INFO "SPI remove was called\n");
+	struct enc28j60	*dev = (struct enc28j60 *)dev_get_drvdata();
+	unregister_netdev(dev->netdev);
+	free_netdev(dev->netdev);
+	
 	return 0;
 }
 
 
 static struct spi_driver enc28j60_spi_driver = {
 	.driver = {
-		.name = "my-enc28j60",
+		.name = "enc28j60",
 		.of_match_table = enc28j60_dt_ids,
 	},
 	.probe = enc28j60_probe,
@@ -182,6 +147,7 @@ static struct spi_driver enc28j60_spi_driver = {
 
 static int enc_up (struct enc28j60 *enc) {
 	mod_timer(&enc->wdog, jiffies);
+	printk(KERN_INFO "enc28j60 interface is up\n");
 
 	//err = request_irq();
 	netif_wake_queue(enc->netdev);
@@ -193,6 +159,7 @@ static int enc_up (struct enc28j60 *enc) {
 static int enc_open (struct net_device *netdev) {
 	struct enc28j60 *eth_drv = netdev_priv(netdev);
 	int err = 0;
+	printk(KERN_INFO "enc28j60 interface is open\n");
 
 	netif_carrier_off(netdev);
 	err = enc_up(enc28j60);
@@ -203,46 +170,69 @@ static int enc_open (struct net_device *netdev) {
 }
 
 static int enc_down (struct enc28j60 *eth_drv) {
+	printk(KERN_INFO "enc28j60 interface is down\n");
+	
 	return 0;
 }
 
 static int enc_close (struct net_device *netdev) {
 	struct enc28j60 *eth_drv = netdev_priv(netdev);
 	int err = 0;
+	printk(KERN_INFO "enc28j60 interface is closed\n");
 	
 	err = enc_down(eth_drv);
 	return err;
 }
 
 static int enc_stop (struct net_device *netdev) {
+	printk(KERN_INFO "enc28j60 interface is stopeed\n");
+	
 	return NETDEV_TX_OK;
 }
 
 static int enc_xmit (struct sk_buff *skb, struct net_device *netdev) {
+	printk(KERN_INFO "enc28j60 interface is xmit\n");
+	
 	return NETDEV_TX_OK;
 }
 
 static int enc_validate_addr (struct net_device *netdev) {
+	printk(KERN_INFO "enc28j60 interface is validate addr\n");
+	
 	return 0;
 }
 
-static void enc_set_multicast (struct net_device *netdev) {}
+static void enc_set_multicast (struct net_device *netdev) {
+	printk(KERN_INFO "enc28j60 interface is set mcast\n");
+
+}
 
 static int enc_set_mac_addr (struct net_device *netdev, void *addr) {
+	printk(KERN_INFO "enc28j60 interface is set mac adr\n");
+	
 	return 0;
 }
 
 static int enc_eth_ioctl (struct net_device *netdev, struct ifreq *ifr, int cmd) {
+	printk(KERN_INFO "enc28j60 interface is ioctl\n");
+	
 	return 0;
 }
 
-static void enc_tx_timeout (struct net_device *netdev, unsigned int txqueue) {}
+static void enc_tx_timeout (struct net_device *netdev, unsigned int txqueue) {
+	printk(KERN_INFO "enc28j60 interface is tx_timeout\n");
+
+}
 
 static int enc_netpoll (struct net_device *netdev) {
+	printk(KERN_INFO "enc28j60 interface is netpoll\n");
+	
 	return 0;
 }
 
 static int enc_set_features (struct net_device *netdev, netdev_features_t features) {
+	printk(KERN_INFO "enc28j60 interface is set features\n");
+	
 	return 0;
 }
 

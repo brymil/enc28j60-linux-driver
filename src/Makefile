@@ -7,13 +7,12 @@ else
   DEBFLAGS = -Wall
 endif
 
-
-
-CFLAGS += -I$(LDDINC) ${DEBFLAGS}
+CFLAGS += -I$(LDDINC) ${DEBFLAGS} ${INCLUDES} ./
 
 ifneq ($(KERNELRELEASE),)
 # call from kernel build system
-obj-m := enc28j60.o
+obj-m := my-enc28j60.o
+my-enc28j60-objs := enc28j60_main.o spi_cmds.o
 else
 
 KERNELDIR ?= /lib/modules/$(shell uname -r)/build
@@ -33,7 +32,7 @@ install:
 endif
 
 clean:
-	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c .tmp_versions
+	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c *.order *.mod *.symvers .tmp_versions
 
 depend .depend dep:
 	$(CC) $(CFLAGS) -M *.c > .depend
