@@ -85,6 +85,14 @@ static void led_test(struct spi_device *spi) {
 	enc_spi_write(spi, miregaddr, 2, WCR);
 	enc_spi_write(spi, mireglow_ledb_on, 2, WCR);
 	enc_spi_write(spi, mireghi_leda_on, 2, WCR);
+
+	//Readout led config
+	char phy_low[2]  = {MIRDL, 0};
+	char phy_high[2] = {MIRDH, 0};
+	enc_spi_read(spi, phy_low, 2, RCR);
+	enc_spi_read(spi, phy_high, 2, RCR);
+	printk(KERN_INFO "PHY LED register status %02x %02x\n", phy_high[0],
+		phy_low[1]);
 }
 
 static int enc28j60_probe(struct spi_device *spi) {
@@ -108,7 +116,7 @@ static int enc28j60_probe(struct spi_device *spi) {
 	spin_lock_init(&eth_drv->rcv_lock);
 	dev_set_drvdata(&spi->dev, eth_drv);
 
-	eth_drv->netdev = alloc_netdev(sizeof(struct enc28j60), "myeth%d", NET_NAME_UNKNOWN, mynetdev_setup);
+/*	eth_drv->netdev = alloc_netdev(sizeof(struct enc28j60), "myeth%d", NET_NAME_UNKNOWN, mynetdev_setup);
 	if (!eth_drv->netdev) {
 		dev_err(&spi->dev, "Failed to alloc netdev\n");
 		return -ENOMEM;
@@ -120,17 +128,16 @@ static int enc28j60_probe(struct spi_device *spi) {
 		free_netdev(eth_drv->netdev);
 		return ret;
 	}
-
-	led_test();
+*/
+	led_test(spi);
 	return ret;
 }
 
 static int enc28j60_remove(struct spi_device *spi) {
 	printk(KERN_INFO "SPI remove was called\n");
-	struct enc28j60	*dev = (struct enc28j60 *)dev_get_drvdata();
-	unregister_netdev(dev->netdev);
-	free_netdev(dev->netdev);
-	
+	//struct enc28j60	*dev = (struct enc28j60 *)dev_get_drvdata(&spi->dev);
+	//unregister_netdev(dev->netdev);
+	//free_netdev(dev->netdev);
 	return 0;
 }
 

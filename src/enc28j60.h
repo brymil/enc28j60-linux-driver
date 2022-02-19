@@ -12,7 +12,7 @@
 
 #define CMD_MASK 0xE0
 #define CMD_POS (5)
-#define RCR (0 << CMD_POS)
+#define RCR ((char)(0u))
 #define RBM (1 << CMD_POS)
 #define WCR (2 << CMD_POS)
 #define WBM (3 << CMD_POS)

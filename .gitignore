@@ -1,6 +1,6 @@
 *.dtbo
 *.o
-*.mod
+*.mod*
 *.ko
 *.symvers
 *.dts.*
